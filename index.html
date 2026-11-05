@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>꼬끼오 깨우기</title>
+<script src="https://unpkg.com/mqtt@5.16.0/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --sky: #E4E8F6;
+    --ink: #1F2450;
+    --comb: #E8412C;
+    --yolk: #FFC93C;
+  }
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: grid; place-items: center;
+    background: var(--sky);
+  }
+
+  .chicken {
+    width: min(70vw, 320px); aspect-ratio: 1;
+    border: 0; padding: 0; background: none; cursor: pointer;
+    border-radius: 50%;
+    -webkit-tap-highlight-color: transparent;
+    /* 연결 전: 흐릿하게 */
+    filter: grayscale(1); opacity: .3;
+    transition: filter .6s ease, opacity .6s ease, transform .1s ease;
+  }
+  .chicken:disabled { cursor: default; }
+  .chicken:focus-visible { outline: 3px solid var(--ink); outline-offset: 8px; }
+
+  /* 연결되면 선명하게 */
+  body.online .chicken { filter: none; opacity: 1; }
+  body.online .chicken:active { transform: scale(.94); }
+
+  .chicken svg { width: 100%; height: 100%; display: block; overflow: visible; }
+
+  /* LED 켜졌을 때 뒤에 은은한 빛 */
+  .glow { fill: var(--yolk); opacity: 0; transition: opacity .3s ease; }
+  body.led .glow { opacity: .55; }
+
+  /* 날개: 몸 옆 붙은 지점을 축으로 회전 */
+  .wing { transform-box: fill-box; transition: transform .45s cubic-bezier(.34,1.56,.64,1); }
+  .wing-l { transform-origin: 100% 0%; }
+  .wing-r { transform-origin: 0% 0%; }
+  body.led .wing-l { transform: rotate(60deg); }
+  body.led .wing-r { transform: rotate(-60deg); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chicken, .glow, .wing { transition: none; }
+  }
+</style>
+</head>
+<body>
+  <button class="chicken" id="chicken" disabled aria-label="닭인형 연결 안 됨">
+    <svg viewBox="0 0 200 200" aria-hidden="true">
+      <circle class="glow" cx="100" cy="114" r="94"/>
+      <!-- 발 -->
+      <g fill="var(--yolk)" stroke="var(--ink)" stroke-width="3">
+        <ellipse cx="84" cy="172" rx="10" ry="6"/>
+        <ellipse cx="116" cy="172" rx="10" ry="6"/>
+      </g>
+      <!-- 볏: 동글동글 세 개 -->
+      <g fill="var(--comb)" stroke="var(--ink)" stroke-width="4">
+        <circle cx="86" cy="62" r="10"/>
+        <circle cx="114" cy="62" r="10"/>
+        <circle cx="100" cy="54" r="12"/>
+      </g>
+      <!-- 날개 (몸 뒤에 붙어 있다가 LED 켜지면 펼침) -->
+      <g fill="#FFFFFF" stroke="var(--ink)" stroke-width="4">
+        <path class="wing wing-l" d="M48 106 C26 108 16 134 28 150 C36 156 46 148 52 140 Z"/>
+        <path class="wing wing-r" d="M152 106 C174 108 184 134 172 150 C164 156 154 148 148 140 Z"/>
+      </g>
+      <!-- 몸: 통통한 동그라미 -->
+      <ellipse cx="100" cy="118" rx="60" ry="56" fill="#FFFFFF" stroke="var(--ink)" stroke-width="4"/>
+      <!-- 눈 + 반짝 -->
+      <g fill="var(--ink)">
+        <circle cx="80" cy="108" r="7.5"/>
+        <circle cx="120" cy="108" r="7.5"/>
+      </g>
+      <g fill="#FFFFFF">
+        <circle cx="82.5" cy="105.5" r="2.6"/>
+        <circle cx="122.5" cy="105.5" r="2.6"/>
+      </g>
+      <!-- 볼터치 -->
+      <g fill="#FF9EA0" opacity=".7">
+        <ellipse cx="66" cy="124" rx="9" ry="5.5"/>
+        <ellipse cx="134" cy="124" rx="9" ry="5.5"/>
+      </g>
+      <!-- 부리, 턱볏 -->
+      <path d="M96 121 q-2 10 4 11 q6 -1 4 -11 z" fill="var(--comb)"/>
+      <path d="M92 118 q8 -7 16 0 q-8 9 -16 0 z" fill="var(--yolk)" stroke="var(--ink)" stroke-width="3" stroke-linejoin="round"/>
+    </svg>
+  </button>
+
+<script>
+  // ===== 여기만 바꾸면 돼요 (ESP32 코드랑 똑같이) =====
+  const CONFIG = {
+    url: "wss://broker.hivemq.com:8884/mqtt",  // 테스트용 공개 서버
+    username: "",
+    password: "",
+    deviceId: "eunchae-chicken-01",            // ESP32 main.py의 DEVICE_ID와 똑같이
+  };
+  // ================================================
+
+  const T_CMD    = `chickenwake/${CONFIG.deviceId}/cmd`;
+  const T_STATUS = `chickenwake/${CONFIG.deviceId}/status`;
+  const T_EVENT  = `chickenwake/${CONFIG.deviceId}/event`;
+
+  const chicken = document.getElementById("chicken");
+  let online = false;
+  let ledOn = false;
+
+  function render() {
+    document.body.classList.toggle("online", online);
+    document.body.classList.toggle("led", online && ledOn);
+    chicken.disabled = !online;
+    chicken.setAttribute("aria-label",
+      !online ? "닭인형 연결 안 됨" : ledOn ? "불 끄기" : "불 켜기");
+  }
+
+  const client = mqtt.connect(CONFIG.url, {
+    username: CONFIG.username || undefined,
+    password: CONFIG.password || undefined,
+    clientId: "web-" + Math.random().toString(16).slice(2, 10),
+    reconnectPeriod: 2000,
+  });
+
+  client.on("connect", () => client.subscribe([T_STATUS, T_EVENT]));
+
+  client.on("message", (topic, payload) => {
+    const text = payload.toString();
+    if (topic === T_STATUS) {
+      online = text === "online";
+      if (!online) ledOn = false;
+    }
+    // ESP32가 실제로 불을 켰다/껐다고 알려줄 때만 화면 반영
+    if (topic === T_EVENT) {
+      if (text === "LED 켜짐") ledOn = true;
+      if (text === "LED 꺼짐") ledOn = false;
+    }
+    render();
+  });
+
+  client.on("offline", () => { online = false; render(); });
+
+  // 닭 누르면 LED 켜기/끄기 번갈아
+  chicken.onclick = () => {
+    const cmd = ledOn ? "led_off" : "led_on";
+    client.publish(T_CMD, JSON.stringify({ cmd, from: "web" }), { qos: 1, retain: false });
+  };
+</script>
+</body>
+</html>

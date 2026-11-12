@@ -117,7 +117,7 @@
     document.body.classList.toggle("led", online && ledOn);
     chicken.disabled = !online;
     chicken.setAttribute("aria-label",
-      !online ? "닭인형 연결 안 됨" : ledOn ? "불 끄기" : "불 켜기");
+      !online ? "닭인형 연결 안 됨" : ledOn ? "날개짓 멈추기" : "깨우기");
   }
 
   const client = mqtt.connect(CONFIG.url, {
@@ -135,19 +135,20 @@
       online = text === "online";
       if (!online) ledOn = false;
     }
-    // ESP32가 실제로 불을 켰다/껐다고 알려줄 때만 화면 반영
+    // ESP32가 실제로 날개짓을 시작/멈췄다고 알려줄 때만 화면 반영
+    // (30초 지나서 저절로 멈춘 것도 여기로 들어옴)
     if (topic === T_EVENT) {
-      if (text === "LED 켜짐") ledOn = true;
-      if (text === "LED 꺼짐") ledOn = false;
+      if (text === "날개짓 시작") ledOn = true;
+      if (text === "멈춤") ledOn = false;
     }
     render();
   });
 
   client.on("offline", () => { online = false; render(); });
 
-  // 닭 누르면 LED 켜기/끄기 번갈아
+  // 닭 누르면 깨우기(날개짓) 시작, 한 번 더 누르면 멈춤
   chicken.onclick = () => {
-    const cmd = ledOn ? "led_off" : "led_on";
+    const cmd = ledOn ? "stop" : "wake";
     client.publish(T_CMD, JSON.stringify({ cmd, from: "web" }), { qos: 1, retain: false });
   };
 </script>
